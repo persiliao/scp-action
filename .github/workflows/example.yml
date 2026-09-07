@@ -1,12 +1,12 @@
 name: example
 
-# 手动触发的部署示例。
-# 使用前请在仓库 Settings -> Secrets 中配置 HOST / USERNAME / SSH_PRIVATE_KEY。
+# Manually triggered deployment example.
+# Before using, configure HOST / USERNAME / SSH_PRIVATE_KEY in Settings -> Secrets.
 on:
   workflow_dispatch:
     inputs:
       target:
-        description: "远端目标目录"
+        description: "Remote target directory"
         required: false
         default: "/opt/app"
 
@@ -16,12 +16,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 构建产物
+      - name: Build artifact
         run: |
           mkdir -p dist
           echo "build at $(date -u +%Y-%m-%dT%H:%M:%SZ)" > dist/BUILD.txt
 
-      - name: 上传到服务器
+      - name: Upload to server
         id: scp
         uses: ./
         with:
@@ -36,5 +36,5 @@ jobs:
           debug: false
           capture_stdout: true
 
-      - name: 打印耗时
-        run: echo "传输耗时 ${{ steps.scp.outputs.duration }} 秒"
+      - name: Print duration
+        run: echo "Transfer took ${{ steps.scp.outputs.duration }} seconds"

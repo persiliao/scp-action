@@ -1,5 +1,5 @@
 name: "SCP Command to Transfer Files"
-description: "通过 SSH/SCP 将文件或目录上传到一个或多个远程服务器，支持密钥/密码认证、跳板机、多机并行。"
+description: "Upload files or directories to one or more remote servers over SSH/SCP, with key/password auth, jump host and parallel transfers."
 author: "PersiLiao"
 
 branding:
@@ -7,137 +7,137 @@ branding:
   color: "blue"
 
 inputs:
-  # ---------------------------------------------------------------- 连接
+  # ---------------------------------------------------------------- Connection
   host:
-    description: "远程主机地址，多台机器用英文逗号分隔（如 foo.com,bar.com）。支持 host:port 写法。"
+    description: "Remote host address. Multiple hosts are separated by commas (e.g. foo.com,bar.com). host:port syntax is supported."
     required: true
   port:
-    description: "远程 SSH 端口，默认 22。"
+    description: "Remote SSH port, default 22."
     required: false
     default: "22"
   username:
-    description: "SSH 登录用户名。"
+    description: "SSH login username."
     required: true
   password:
-    description: "SSH 密码认证（安全性低于密钥，建议优先使用 key）。"
+    description: "SSH password authentication (less secure than a key; prefer key when possible)."
     required: false
   key:
-    description: "SSH 私钥内容（~/.ssh/id_ed25519 或 id_rsa 的全文），建议存放于 GitHub Secrets。"
+    description: "SSH private key content (full text of ~/.ssh/id_ed25519 or id_rsa), ideally stored in GitHub Secrets."
     required: false
   key_path:
-    description: "SSH 私钥文件路径，与 key 二选一。"
+    description: "Path to the SSH private key file. Alternative to key."
     required: false
   passphrase:
-    description: "SSH 私钥的口令（passphrase），若私钥未加密则留空。"
+    description: "Passphrase of the SSH private key. Leave empty if the key is unencrypted."
     required: false
   fingerprint:
-    description: "远程主机公钥的 SHA256 指纹，用于主机指纹校验，防止中间人攻击。留空则跳过校验（生产环境不推荐）。"
+    description: "SHA256 fingerprint of the remote host public key, used for host key verification to prevent MITM. Empty skips verification (not recommended for production)."
     required: false
   protocol:
-    description: "IP 协议版本，可选值 tcp / tcp4 / tcp6，默认 tcp。"
+    description: "IP protocol version. One of tcp / tcp4 / tcp6, default tcp."
     required: false
     default: "tcp"
   timeout:
-    description: "建立 SSH 连接的超时时间，默认 30s。"
+    description: "Timeout for establishing the SSH connection, default 30s."
     required: false
     default: "30s"
   command_timeout:
-    description: "单条远端命令的执行超时时间，默认 10m。"
+    description: "Timeout for a single remote command, default 10m."
     required: false
     default: "10m"
   use_insecure_cipher:
-    description: "为兼容老旧服务端，启用额外的不安全加密算法。非必要不建议开启。"
+    description: "Enable additional insecure ciphers for legacy servers. Not recommended unless necessary."
     required: false
   cipher:
-    description: "指定 SSH 加密算法（如 aes256-ctr），留空则由客户端协商。"
+    description: "Force a specific SSH cipher (e.g. aes256-ctr). Empty lets the client negotiate."
     required: false
 
-  # ---------------------------------------------------------------- 传输
+  # ---------------------------------------------------------------- Transfer
   source:
-    description: "待上传的本地文件/目录，支持英文逗号或换行分隔，支持通配符（如 dist/*）。以 ! 开头的条目作为排除模式。"
+    description: "Local files/directories to upload. Comma or newline separated, globs supported (e.g. dist/*). Entries prefixed with ! are exclude patterns."
     required: true
   target:
-    description: "远程服务器上的目标目录（必须是目录路径），支持英文逗号分隔多个目标。"
+    description: "Target directory on the remote server (must be a directory path). Multiple targets are comma separated."
     required: true
   rm:
-    description: "上传前删除远端目标目录，请谨慎使用。"
+    description: "Remove the remote target directory before upload. Use with caution."
     required: false
     default: "false"
   strip_components:
-    description: "远端解包时剥离的 leading 路径层级数，默认 0（保留 source 中的原始路径）。"
+    description: "Number of leading path elements to strip on the remote side when extracting, default 0 (preserve the original path from source)."
     required: false
     default: "0"
   overwrite:
-    description: "远端解包时追加 --overwrite，覆盖已存在的文件。"
+    description: "Append --overwrite on remote extraction to overwrite existing files."
     required: false
     default: "false"
   tar_dereference:
-    description: "打包时追加 --dereference，跟随符号链接（Windows 服务器需要开启）。"
+    description: "Append --dereference when archiving to follow symlinks (required for Windows servers)."
     required: false
     default: "false"
   tar_tmp_path:
-    description: "远端存放临时 tar 包的目录，需以 / 结尾，默认 /tmp/。"
+    description: "Remote directory for the temporary tar archive. Must end with /, default /tmp/."
     required: false
     default: "/tmp/"
   tar_exec:
-    description: "远端 tar 可执行文件的路径，默认 tar。"
+    description: "Path to the remote tar executable, default tar."
     required: false
     default: "tar"
   debug:
-    description: "输出调试信息（等价于 ssh -vvv）。"
+    description: "Emit debug information (equivalent to ssh -vvv)."
     required: false
     default: "false"
   dry_run:
-    description: "仅打印将要执行的动作，不实际连接与传输。"
+    description: "Only print the actions that would be performed; no connection or transfer happens."
     required: false
     default: "false"
   capture_stdout:
-    description: "为 true 时，把远端命令的标准输出写入 action 的 stdout 输出。"
+    description: "When true, write the remote command stdout into the stdout action output."
     required: false
     default: "false"
 
-  # ---------------------------------------------------------------- 跳板机
+  # ---------------------------------------------------------------- Jump host
   proxy_host:
-    description: "跳板机（SSH Proxy / jump host）地址。"
+    description: "Jump host (SSH Proxy / jump host) address."
     required: false
   proxy_port:
-    description: "跳板机 SSH 端口，默认 22。"
+    description: "Jump host SSH port, default 22."
     required: false
     default: "22"
   proxy_username:
-    description: "跳板机登录用户名。"
+    description: "Jump host login username."
     required: false
   proxy_password:
-    description: "跳板机密码。"
+    description: "Jump host password."
     required: false
   proxy_key:
-    description: "跳板机 SSH 私钥内容。"
+    description: "Jump host SSH private key content."
     required: false
   proxy_key_path:
-    description: "跳板机 SSH 私钥文件路径。"
+    description: "Path to the jump host SSH private key file."
     required: false
   proxy_passphrase:
-    description: "跳板机私钥口令。"
+    description: "Jump host private key passphrase."
     required: false
   proxy_fingerprint:
-    description: "跳板机公钥的 SHA256 指纹，用于主机指纹校验。"
+    description: "SHA256 fingerprint of the jump host public key, used for host key verification."
     required: false
   proxy_timeout:
-    description: "跳板机连接超时时间，默认 30s。"
+    description: "Jump host connection timeout, default 30s."
     required: false
     default: "30s"
   proxy_use_insecure_cipher:
-    description: "为跳板机启用额外的不安全加密算法。"
+    description: "Enable additional insecure ciphers on the jump host."
     required: false
   proxy_cipher:
-    description: "跳板机加密算法。"
+    description: "Jump host cipher."
     required: false
 
 outputs:
   stdout:
-    description: "capture_stdout 为 true 时，远端命令的标准输出内容。"
+    description: "Remote command stdout when capture_stdout is true."
   duration:
-    description: "本次传输耗时（秒）。"
+    description: "Transfer duration in seconds."
 
 runs:
   using: "docker"

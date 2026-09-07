@@ -2,22 +2,23 @@
 # ------------------------------------------------------------------------------
 # scp-action :: entrypoint
 #
-# 通过 SSH/SCP 把本地文件/目录打包上传到一台或多台远程服务器。
-# 参数由 GitHub Actions 以 INPUT_<NAME> 环境变量注入（Docker action 约定）。
+# Upload local files/directories to one or more remote servers over SSH/SCP.
+# Inputs are injected by GitHub Actions as INPUT_<NAME> environment variables
+# (the Docker action convention).
 #
-# 传输语义（与 appleboy/drone-scp 保持一致）：
-#   1. 本地按 source 原样打包为 tar.gz —— source 中写的路径会完整保留；
-#      例：source=tests/a.txt, target=/tmp/out  =>  /tmp/out/tests/a.txt
-#   2. 远端解包时才应用 --strip-components；
-#      例：strip_components=1                  =>  /tmp/out/a.txt
-#   3. 以 ! 开头的 source 条目作为 --exclude 排除模式。
+# Copy semantics (consistent with appleboy/drone-scp):
+#   1. Sources are archived exactly as written in `source` -- paths are preserved.
+#      e.g. source=tests/a.txt, target=/tmp/out  =>  /tmp/out/tests/a.txt
+#   2. --strip-components is applied on the remote side during extraction.
+#      e.g. strip_components=1                  =>  /tmp/out/a.txt
+#   3. A `source` entry prefixed with ! is treated as a tar --exclude pattern.
 # ------------------------------------------------------------------------------
 set -Eeuo pipefail
 
 readonly ACTION_VERSION="v1"
 
 # ==============================================================================
-# 基础工具
+# Basic utilities
 # ==============================================================================
 
 log()  { printf '%s\n' "$*"; }
@@ -31,7 +32,7 @@ debug() {
   fi
 }
 
-# 布尔值判定：1 / true / yes / y / on（忽略大小写与首尾空白）
+# Boolean check: 1 / true / yes / y / on (case-insensitive, trimmed)
 is_true() {
   case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
     1 | true | yes | y | on) return 0 ;;
@@ -39,7 +40,7 @@ is_true() {
   esac
 }
 
-# 去除首尾空白
+# Trim leading/trailing whitespace
 trim() {
   local s="${1-}"
   s="${s#"${s%%[![:space:]]*}"}"
@@ -47,14 +48,14 @@ trim() {
   printf '%s' "$s"
 }
 
-# 单引号包裹，供远端 shell 安全解析
+# Single-quote wrap for safe parsing by the remote shell
 sq() {
   local s="${1-}"
   s="${s//\'/\'\\\'\'}"
   printf "'%s'" "$s"
 }
 
-# 时长字符串 -> 秒（30 / 30s / 2m / 1h / 500ms）
+# Duration string -> seconds (30 / 30s / 2m / 1h / 500ms)
 to_seconds() {
   local v
   v="$(trim "${1-}")"
@@ -77,13 +78,14 @@ to_seconds() {
   fi
 }
 
-# 随机串，用于远端临时文件名（避免管道，防止 pipefail 干扰）
+# Random string for remote temp file names (no pipe, to avoid pipefail interference)
 random_string() {
   printf '%s%s%s' "${RANDOM}" "${RANDOM}" "$(date +%s)"
 }
 
-# 逗号 / 换行分隔的字符串 -> 逐行输出
-# 注意：必须先补一个换行，否则 while read 会丢弃末尾没有换行符的最后一项
+# Comma / newline separated string -> one item per line
+# Note: a trailing newline is prepended first, otherwise `while read`
+# drops the last item when the input has no trailing newline.
 split_list() {
   local raw="${1-}" item
   printf '%s\n' "${raw}" | tr ',' '\n' | while IFS= read -r item; do
@@ -95,7 +97,7 @@ split_list() {
   return 0
 }
 
-# 解析 "host" 或 "host:port"，结果写入 RHOST / RPORT
+# Parse "host" or "host:port", writing results into RHOST / RPORT
 RHOST=""
 RPORT=""
 resolve_host_port() {
@@ -109,7 +111,7 @@ resolve_host_port() {
 }
 
 # ==============================================================================
-# 输入
+# Inputs
 # ==============================================================================
 
 INPUT_HOST="${INPUT_HOST:-}"
@@ -160,14 +162,14 @@ if [[ -z "${INPUT_COMMAND_TIMEOUT}" ]]; then
   INPUT_COMMAND_TIMEOUT="10m"
 fi
 
-# 兼容老旧服务端的不安全算法清单
+# Insecure algorithm list for legacy servers
 readonly INSECURE_CIPHERS="aes128-cbc,aes192-cbc,aes256-cbc,3des-cbc,arcfour,arcfour128,arcfour256"
 readonly INSECURE_KEX="diffie-hellman-group1-sha1,diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1"
 readonly INSECURE_MACS="hmac-sha1,hmac-md5,hmac-sha1-96,hmac-md5-96"
 readonly INSECURE_HOSTKEY="ssh-rsa,ssh-dss"
 
 # ==============================================================================
-# 运行时状态
+# Runtime state
 # ==============================================================================
 
 WORK_ROOT="$(mktemp -d)"
@@ -187,7 +189,7 @@ declare -a HOSTS=()
 declare -a TARGETS=()
 declare -a SOURCES=()
 declare -a EXCLUDES=()
-declare -a REMOTE_NAMES=()   # 每台主机一个独立的远端临时包文件名
+declare -a REMOTE_NAMES=()   # one independent remote temp archive name per host
 declare -a SSH_OPTS=()
 declare -A KH_FILE=()
 declare -A KH_STRICT=()
@@ -205,38 +207,38 @@ cleanup() {
 trap cleanup EXIT
 
 # ==============================================================================
-# 校验
+# Validation
 # ==============================================================================
 
 validate_inputs() {
   mapfile -t HOSTS < <(split_list "${INPUT_HOST}")
   if [[ "${#HOSTS[@]}" -eq 0 ]]; then
-    die "缺少必填参数：host"
+    die "Missing required input: host"
   fi
 
   mapfile -t TARGETS < <(split_list "${INPUT_TARGET}")
   if [[ "${#TARGETS[@]}" -eq 0 ]]; then
-    die "缺少必填参数：target"
+    die "Missing required input: target"
   fi
 
   if [[ -z "${INPUT_USERNAME}" ]]; then
-    die "缺少必填参数：username"
+    die "Missing required input: username"
   fi
 
   if [[ -z "${INPUT_KEY}" && -z "${INPUT_KEY_PATH}" && -z "${INPUT_PASSWORD}" ]]; then
-    die "必须提供 password 或 key / key_path 之一，否则无法完成认证"
+    die "Either password, key or key_path must be provided for authentication"
   fi
 
   if [[ ! "${INPUT_STRIP_COMPONENTS}" =~ ^[0-9]+$ ]]; then
-    die "strip_components 必须是非负整数，当前值：${INPUT_STRIP_COMPONENTS}"
+    die "strip_components must be a non-negative integer, got: ${INPUT_STRIP_COMPONENTS}"
   fi
 
   case "${INPUT_PROTOCOL}" in
     tcp | tcp4 | tcp6) ;;
-    *) die "protocol 取值非法：${INPUT_PROTOCOL}（可选 tcp / tcp4 / tcp6）" ;;
+    *) die "Invalid protocol: ${INPUT_PROTOCOL} (expected tcp / tcp4 / tcp6)" ;;
   esac
 
-  # tar_tmp_path 必须以 / 结尾，否则会拼出畸形路径
+  # tar_tmp_path must end with /, otherwise a malformed path is assembled
   if [[ -n "${INPUT_TAR_TMP_PATH}" && "${INPUT_TAR_TMP_PATH}" != */ ]]; then
     INPUT_TAR_TMP_PATH="${INPUT_TAR_TMP_PATH}/"
   fi
@@ -244,7 +246,9 @@ validate_inputs() {
   ARCHIVE_NAME="$(random_string).tar.gz"
   ARCHIVE="${TMPDIR:-/tmp}/${ARCHIVE_NAME}"
 
-  # 每台主机使用独立的远端临时文件名，避免同一物理机被重复列举时互相覆盖
+  # One independent remote temp archive name per host, so that listing the
+  # same physical host multiple times does not cause concurrent uploads to
+  # overwrite each other.
   local i
   for i in "${!HOSTS[@]}"; do
     REMOTE_NAMES+=("$(random_string).${i}.tar.gz")
@@ -255,7 +259,7 @@ validate_inputs() {
 }
 
 # ==============================================================================
-# 本地凭据
+# Local credentials
 # ==============================================================================
 
 write_key_file() {
@@ -265,20 +269,20 @@ write_key_file() {
 }
 
 prepare_credentials() {
-  # 私钥统一落在 WORK_ROOT 并通过 -i 显式指定，
-  # 因此不依赖也不改动 ~/.ssh。
+  # Private keys always land in WORK_ROOT and are passed explicitly via -i,
+  # so we neither rely on nor modify ~/.ssh.
   if [[ -n "${INPUT_KEY}" ]]; then
     KEY_FILE="${WORK_ROOT}/id_scp_action"
     write_key_file "${INPUT_KEY}" "${KEY_FILE}"
   elif [[ -n "${INPUT_KEY_PATH}" ]]; then
     if [[ ! -r "${INPUT_KEY_PATH}" ]]; then
-      die "key_path 指向的私钥不可读：${INPUT_KEY_PATH}"
+      die "Private key at key_path is not readable: ${INPUT_KEY_PATH}"
     fi
     KEY_FILE="${INPUT_KEY_PATH}"
     chmod 0600 "${KEY_FILE}" 2>/dev/null || true
   fi
 
-  # 带 passphrase 的私钥交给 ssh-agent 托管，避免交互式输入
+  # A passphrase-protected key is handed to ssh-agent, avoiding interactive input
   if [[ -n "${KEY_FILE}" && -n "${INPUT_PASSPHRASE}" ]]; then
     local askpass="${WORK_ROOT}/askpass.sh"
     printf '#!/bin/sh\nprintf %%s %s\n' "$(sq "${INPUT_PASSPHRASE}")" >"${askpass}"
@@ -287,9 +291,9 @@ prepare_credentials() {
     eval "$(ssh-agent -s)" >/dev/null
     if ! SSH_ASKPASS="${askpass}" SSH_ASKPASS_REQUIRE=force DISPLAY=":0" \
       ssh-add "${KEY_FILE}" >/dev/null 2>&1; then
-      die "加载私钥失败，请检查 passphrase 是否正确"
+      die "Failed to load private key; please verify the passphrase"
     fi
-    info "已将带 passphrase 的私钥载入 ssh-agent（pid=${SSH_AGENT_PID}）"
+    info "Loaded passphrase-protected key into ssh-agent (pid=${SSH_AGENT_PID})"
   fi
 
   if [[ -n "${INPUT_PROXY_KEY}" ]]; then
@@ -297,30 +301,31 @@ prepare_credentials() {
     write_key_file "${INPUT_PROXY_KEY}" "${PROXY_KEY_FILE}"
   elif [[ -n "${INPUT_PROXY_KEY_PATH}" ]]; then
     if [[ ! -r "${INPUT_PROXY_KEY_PATH}" ]]; then
-      die "proxy_key_path 指向的私钥不可读：${INPUT_PROXY_KEY_PATH}"
+      die "Proxy private key at proxy_key_path is not readable: ${INPUT_PROXY_KEY_PATH}"
     fi
     PROXY_KEY_FILE="${INPUT_PROXY_KEY_PATH}"
     chmod 0600 "${PROXY_KEY_FILE}" 2>/dev/null || true
   fi
 
   if [[ -n "${PROXY_KEY_FILE}" && -n "${INPUT_PROXY_PASSPHRASE}" ]]; then
-    warn "跳板机私钥带 passphrase 时无法自动加载，请改用无口令私钥"
+    warn "Cannot auto-load a passphrase-protected proxy key; use a key without passphrase"
   fi
 }
 
 # ==============================================================================
-# 主机指纹校验
+# Host key fingerprint verification
 # ==============================================================================
 
 # setup_known_hosts <host> <port> <fingerprint> <known_hosts_file>
-# 成功（返回 0）表示指纹匹配且已写入；返回 1 表示未提供指纹、跳过校验
+# Returns 0 when the fingerprint matches and is written; returns 1 when no
+# fingerprint is provided (verification skipped).
 setup_known_hosts() {
   local host="$1" port="$2" fingerprint="$3" khfile="$4"
 
   : >"${khfile}"
 
   if [[ -z "${fingerprint}" ]]; then
-    warn "未提供 ${host} 的 fingerprint，已跳过主机指纹校验（存在中间人攻击风险）"
+    warn "No fingerprint provided for ${host}; skipping host key verification (vulnerable to MITM)"
     return 1
   fi
 
@@ -329,7 +334,7 @@ setup_known_hosts() {
 
   ssh-keyscan -T 20 -p "${port}" "${host}" >"${scan}" 2>/dev/null || true
   if [[ ! -s "${scan}" ]]; then
-    die "ssh-keyscan ${host}:${port} 失败，无法获取主机公钥"
+    die "ssh-keyscan failed for ${host}:${port}; unable to obtain host public key"
   fi
 
   want="$(printf '%s' "${fingerprint}" | sed -e 's/^SHA256://I' -e 's/://g')"
@@ -347,14 +352,15 @@ setup_known_hosts() {
   done <"${scan}"
 
   if [[ "${matched}" -ne 1 ]]; then
-    die "主机指纹不匹配：${host}:${port}（期望 ${fingerprint}）"
+    die "Host key fingerprint mismatch for ${host}:${port} (expected ${fingerprint})"
   fi
 
-  info "主机指纹校验通过：${host}:${port}"
+  info "Host key fingerprint verified: ${host}:${port}"
   return 0
 }
 
-# 全部目标主机的指纹在主进程中一次性校验，避免并发写同一文件
+# All target hosts are verified in the main process up front, to avoid
+# concurrent writes to a shared known_hosts file.
 prepare_host_keys() {
   local entry host port kh safe
 
@@ -380,7 +386,7 @@ prepare_host_keys() {
 }
 
 # ==============================================================================
-# 跳板机
+# Jump host (proxy)
 # ==============================================================================
 
 prepare_proxy() {
@@ -389,7 +395,7 @@ prepare_proxy() {
   fi
 
   if [[ -z "${INPUT_PROXY_USERNAME}" ]]; then
-    die "设置了 proxy_host，但缺少 proxy_username"
+    die "proxy_host set but proxy_username is missing"
   fi
 
   if [[ "${DRY_RUN}" -eq 0 ]]; then
@@ -421,7 +427,7 @@ prepare_proxy() {
 
   cat >"${PROXY_SCRIPT}" <<EOF
 #!/bin/sh
-# scp-action 自动生成：经由跳板机转发 TCP 连接
+# scp-action generated: forward TCP through the jump host
 exec ${prefix} ssh -W "[\$1]:\$2" \\
   -p $(sq "${INPUT_PROXY_PORT}") \\
   -l $(sq "${INPUT_PROXY_USERNAME}") \\
@@ -435,11 +441,11 @@ exec ${prefix} ssh -W "[\$1]:\$2" \\
 EOF
   chmod 0700 "${PROXY_SCRIPT}"
 
-  info "已启用跳板机：${INPUT_PROXY_USERNAME}@${INPUT_PROXY_HOST}:${INPUT_PROXY_PORT}"
+  info "Jump host enabled: ${INPUT_PROXY_USERNAME}@${INPUT_PROXY_HOST}:${INPUT_PROXY_PORT}"
 }
 
 # ==============================================================================
-# SSH 选项
+# SSH options
 # ==============================================================================
 
 build_ssh_opts() {
@@ -475,7 +481,7 @@ build_ssh_opts() {
   fi
 
   if is_true "${INPUT_USE_INSECURE_CIPHER}"; then
-    warn "已开启 use_insecure_cipher，将允许不安全的加密算法"
+    warn "use_insecure_cipher enabled; insecure ciphers will be allowed"
     SSH_OPTS+=(
       -o "Ciphers=+${INSECURE_CIPHERS}"
       -o "KexAlgorithms=+${INSECURE_KEX}"
@@ -495,13 +501,13 @@ build_ssh_opts() {
 }
 
 # ==============================================================================
-# 远端命令执行
+# Remote command execution
 # ==============================================================================
 
 declare -a PW_PREFIX=()
 RUN_OUT=""
 
-# run_remote <host> <port> <command> —— 返回远端退出码，输出存入 RUN_OUT
+# run_remote <host> <port> <command> -- returns the remote exit code; output in RUN_OUT
 run_remote() {
   local host="$1" port="$2" command="$3"
   local rc=0
@@ -538,7 +544,7 @@ run_remote() {
   return "${rc}"
 }
 
-# 静默执行（用于系统类型探测、清理等不关心输出的场景）
+# Silent execution (for OS-type probing, cleanup, etc. where output is irrelevant)
 run_remote_quiet() {
   local host="$1" port="$2" command="$3"
   local bak="${DEBUG}" rc=0
@@ -576,7 +582,7 @@ untar_cmd() {
 }
 
 # ==============================================================================
-# 本地打包
+# Local archive creation
 # ==============================================================================
 
 expand_sources() {
@@ -586,7 +592,7 @@ expand_sources() {
 
   mapfile -t items < <(split_list "${INPUT_SOURCE}")
   if [[ "${#items[@]}" -eq 0 ]]; then
-    die "缺少必填参数：source"
+    die "Missing required input: source"
   fi
 
   for item in "${items[@]}"; do
@@ -596,8 +602,8 @@ expand_sources() {
       continue
     fi
 
-    # 仅在确实包含通配元字符时才做 glob 展开，
-    # 避免对含空格的普通路径造成词分裂。
+    # Only perform glob expansion when a wildcard metacharacter is present,
+    # to avoid word-splitting ordinary paths that contain spaces.
     if [[ "${item}" == *[\*\?\[]* ]]; then
       matches=()
       shopt -s nullglob
@@ -605,19 +611,19 @@ expand_sources() {
       matches=(${item})
       shopt -u nullglob
       if [[ "${#matches[@]}" -eq 0 ]]; then
-        die "source 通配符未匹配到任何文件：${item}"
+        die "source glob matched no files: ${item}"
       fi
       SOURCES+=("${matches[@]}")
     else
       if [[ ! -e "${item}" ]]; then
-        die "source 路径不存在：${item}"
+        die "source path does not exist: ${item}"
       fi
       SOURCES+=("${item}")
     fi
   done
 
   if [[ "${#SOURCES[@]}" -eq 0 ]]; then
-    die "source 解析后为空，没有可上传的文件"
+    die "source resolved to nothing; no files to upload"
   fi
 }
 
@@ -635,18 +641,18 @@ build_archive() {
 
   tar_args+=(-zcf "${ARCHIVE}" -- "${SOURCES[@]}")
 
-  info "打包 ${#SOURCES[@]} 个条目 -> ${ARCHIVE}"
+  info "Archiving ${#SOURCES[@]} item(s) -> ${ARCHIVE}"
   debug "\$ tar ${tar_args[*]}"
 
   if ! tar "${tar_args[@]}"; then
-    die "本地打包失败，请检查 source 路径"
+    die "Local archive creation failed; please check the source paths"
   fi
 
-  info "打包完成，大小 $(du -h "${ARCHIVE}" | awk '{print $1}')"
+  info "Archive created, size $(du -h "${ARCHIVE}" | awk '{print $1}')"
 }
 
 # ==============================================================================
-# 传输
+# Transfer
 # ==============================================================================
 
 upload_archive() {
@@ -673,7 +679,7 @@ upload_archive() {
   set -e
 
   if [[ "${rc}" -ne 0 ]]; then
-    warn "scp 传输失败，改用 ssh stdin 通道重试"
+    warn "scp transfer failed; retrying over ssh stdin channel"
     set +e
     RUN_OUT="$(
       timeout "${INPUT_COMMAND_TIMEOUT}" \
@@ -692,7 +698,7 @@ upload_archive() {
   return "${rc}"
 }
 
-# deploy_one 在子 shell 中并发执行
+# deploy_one runs concurrently in a subshell
 deploy_one() {
   local idx="$1" entry="$2"
   local host port os_type remote_tar target
@@ -705,21 +711,21 @@ deploy_one() {
 
   remote_tar="${INPUT_TAR_TMP_PATH}${REMOTE_NAMES[${idx}]}"
 
-  # 通过执行 Windows 专有命令 ver 判断远端系统类型
+  # Detect remote OS by running the Windows-only command `ver`
   os_type="unix"
   if [[ "${DRY_RUN}" -eq 0 ]] && run_remote_quiet "${host}" "${port}" "ver"; then
     os_type="windows"
   fi
-  info "远端系统类型：${os_type}"
+  info "Remote OS type: ${os_type}"
 
   if ! upload_archive "${host}" "${port}" "${remote_tar}"; then
     return 1
   fi
-  info "已上传临时包 ${remote_tar}"
+  info "Uploaded archive ${remote_tar}"
 
   for target in "${TARGETS[@]}"; do
     if is_true "${INPUT_RM}"; then
-      info "清理目标目录 ${target}"
+      info "Cleaning target directory ${target}"
       if ! run_remote "${host}" "${port}" "$(rm_cmd "${os_type}" "${target}")"; then
         printf '%s\n' "${RUN_OUT}" >&2
         return 1
@@ -731,7 +737,7 @@ deploy_one() {
       return 1
     fi
 
-    info "解包到 ${target}"
+    info "Extracting to ${target}"
     if ! run_remote "${host}" "${port}" "$(untar_cmd "${target}" "${remote_tar}")"; then
       printf '%s\n' "${RUN_OUT}" >&2
       return 1
@@ -739,11 +745,11 @@ deploy_one() {
   done
 
   run_remote_quiet "${host}" "${port}" "$(rm_cmd "${os_type}" "${remote_tar}")" || true
-  info "完成 ${host}:${port}"
+  info "Done ${host}:${port}"
   return 0
 }
 
-# 失败回滚：清理所有主机上的临时包
+# Failure rollback: clean up the temp archive on every host
 cleanup_remote() {
   local i entry host port remote_tar
 
@@ -783,23 +789,23 @@ deploy_all() {
     cat "${log_files[$i]}"
     if [[ "${st}" != "0" ]]; then
       failed=1
-      printf '::error::上传失败：%s\n' "${HOSTS[$i]}"
+      printf '::error::Upload failed: %s\n' "${HOSTS[$i]}"
     fi
   done
 
   if [[ "${failed}" -ne 0 ]]; then
-    warn "正在回滚远端临时文件"
+    warn "Rolling back remote temp files"
     cleanup_remote
-    die "部分主机上传失败，详见上方日志"
+    die "Upload failed on some hosts; see logs above"
   fi
 
   log "==================================================="
-  log "成功传输到全部 ${#HOSTS[@]} 台主机"
+  log "Successfully transferred to all ${#HOSTS[@]} host(s)"
   log "==================================================="
 }
 
 # ==============================================================================
-# 输出
+# Outputs
 # ==============================================================================
 
 write_outputs() {
@@ -837,7 +843,7 @@ main() {
   expand_sources
 
   if [[ "${DRY_RUN}" -eq 1 ]]; then
-    warn "dry_run 已开启，仅展示执行计划，不会实际连接远程服务器"
+    warn "dry_run enabled; showing the execution plan only, no connection will be made"
   fi
 
   prepare_credentials
@@ -849,7 +855,7 @@ main() {
   end="$(date +%s)"
   duration="$((end - start))"
   write_outputs "${duration}"
-  info "耗时 ${duration}s"
+  info "Elapsed time: ${duration}s"
 }
 
 main "$@"

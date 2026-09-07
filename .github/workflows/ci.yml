@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   lint:
-    name: 静态检查
+    name: Static checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,7 +28,7 @@ jobs:
             -v "${{ github.workspace }}:/repo" -w /repo \
             rhysd/actionlint:latest -color
 
-      - name: 校验 action.yml
+      - name: Validate action.yml
         run: |
           python3 -m pip install --quiet pyyaml
           python3 - <<'PY'
@@ -44,15 +44,15 @@ jobs:
           PY
 
   build:
-    name: 构建镜像并冒烟
+    name: Build image and smoke test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: 构建镜像
+      - name: Build image
         run: docker build -t scp-action:ci .
 
-      - name: 冒烟：dry-run 全流程
+      - name: Smoke - dry-run end-to-end
         run: |
           docker run --rm \
             -v "${{ github.workspace }}:/github/workspace" \
@@ -65,7 +65,7 @@ jobs:
             -e INPUT_DRY_RUN=true \
             scp-action:ci
 
-      - name: 冒烟：缺少认证信息应报错退出
+      - name: Smoke - missing auth must fail
         run: |
           set +e
           docker run --rm \
@@ -79,7 +79,7 @@ jobs:
           code=$?
           set -e
           if [ "$code" -eq 0 ]; then
-            echo "::error::缺少认证信息时应当失败"
+            echo "::error::should fail when auth is missing"
             exit 1
           fi
-          echo "按预期失败，退出码 $code"
+          echo "Failed as expected, exit code $code"

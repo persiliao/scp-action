@@ -1,6 +1,6 @@
 name: integration
 
-# 在 runner 本机启动 sshd，对本 Action 做端到端验证。
+# Start sshd on the runner itself and run end-to-end verification of this action.
 on:
   push:
     branches: [main]
@@ -15,13 +15,13 @@ env:
 
 jobs:
   e2e:
-    name: 端到端传输测试
+    name: End-to-end transfer tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # ---------------------------------------------------------------- 环境
-      - name: 启动本地 sshd
+      # ---------------------------------------------------------------- Setup
+      - name: Start local sshd
         run: |
           set -euo pipefail
           sudo apt-get update -qq
@@ -43,7 +43,7 @@ jobs:
             -o 'PasswordAuthentication yes'
           sleep 1
 
-      - name: 采集主机指纹与私钥
+      - name: Collect host fingerprint and private key
         id: ssh
         run: |
           set -euo pipefail
@@ -58,7 +58,7 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
           echo "fingerprint=${fp}"
 
-      - name: 获取 runner 内网 IP（供容器网络访问 sshd）
+      - name: Get runner private IP (for the container to reach sshd)
         id: net
         run: |
           set -euo pipefail
@@ -66,12 +66,13 @@ jobs:
           echo "value=${ip}" >> "${GITHUB_OUTPUT}"
           echo "runner ip=${ip}"
 
-      - name: 构建镜像
+      - name: Build image
         run: docker build -t scp-action:ci .
 
-      # ------------------------------------------------------- 用例 1：uses 路径
-      # 注意：Action 容器与 runner 不共享网络命名空间，因此用内网 IP 而非 127.0.0.1
-      - name: 用例1 - 通过 action.yml 调用（密钥 + 指纹 + 保留原始路径）
+      # ------------------------------------------------------- Case 1: uses path
+      # Note: the action container does not share the runner network namespace,
+      # so the private IP is used instead of 127.0.0.1
+      - name: Case 1 - invoke via action.yml (key + fingerprint, preserve original paths)
         id: case1
         uses: ./
         with:
@@ -83,15 +84,15 @@ jobs:
           source: "tests/a.txt,tests/b.txt"
           target: "/tmp/out1"
 
-      - name: 校验用例1
+      - name: Verify case 1
         run: |
           test -f /tmp/out1/tests/a.txt
           test -f /tmp/out1/tests/b.txt
           echo "outputs.duration=${{ steps.case1.outputs.duration }}"
-          echo "用例1 通过"
+          echo "Case 1 passed"
 
-      # ------------------------------------------------------- 用例 2：strip
-      - name: 用例2 - strip_components=1
+      # ------------------------------------------------------- Case 2: strip
+      - name: Case 2 - strip_components=1
         run: |
           docker run --rm --network host \
             -v "${{ github.workspace }}:/github/workspace" -w /github/workspace \
@@ -105,14 +106,14 @@ jobs:
             -e INPUT_STRIP_COMPONENTS=1 \
             scp-action:ci
 
-      - name: 校验用例2
+      - name: Verify case 2
         run: |
           test -f /tmp/out2/a.txt
           test ! -e /tmp/out2/tests
-          echo "用例2 通过"
+          echo "Case 2 passed"
 
-      # ------------------------------------------------------- 用例 3：glob/排除
-      - name: 用例3 - 通配符与排除
+      # ------------------------------------------------------- Case 3: glob/exclude
+      - name: Case 3 - glob and exclude
         run: |
           docker run --rm --network host \
             -v "${{ github.workspace }}:/github/workspace" -w /github/workspace \
@@ -125,15 +126,15 @@ jobs:
             -e INPUT_TARGET=/tmp/out3 \
             scp-action:ci
 
-      - name: 校验用例3
+      - name: Verify case 3
         run: |
           test -f /tmp/out3/tests/a.txt
           test -f /tmp/out3/tests/b.txt
           test ! -e /tmp/out3/tests/c.txt
-          echo "用例3 通过"
+          echo "Case 3 passed"
 
-      # ------------------------------------------------------- 用例 4：rm
-      - name: 用例4 - 上传前清理目标目录
+      # ------------------------------------------------------- Case 4: rm
+      - name: Case 4 - clean target before upload
         run: |
           mkdir -p /tmp/out4 && touch /tmp/out4/stale.txt
           docker run --rm --network host \
@@ -148,14 +149,14 @@ jobs:
             -e INPUT_RM=true \
             scp-action:ci
 
-      - name: 校验用例4
+      - name: Verify case 4
         run: |
           test ! -e /tmp/out4/stale.txt
           test -f /tmp/out4/tests/a.txt
-          echo "用例4 通过"
+          echo "Case 4 passed"
 
-      # ------------------------------------------------------- 用例 5：密码认证
-      - name: 用例5 - 密码认证
+      # ------------------------------------------------------- Case 5: password
+      - name: Case 5 - password authentication
         run: |
           docker run --rm --network host \
             -v "${{ github.workspace }}:/github/workspace" -w /github/workspace \
@@ -167,13 +168,13 @@ jobs:
             -e INPUT_TARGET=/tmp/out5 \
             scp-action:ci
 
-      - name: 校验用例5
+      - name: Verify case 5
         run: |
           test -f /tmp/out5/tests/c.txt
-          echo "用例5 通过"
+          echo "Case 5 passed"
 
-      # ------------------------------------------------------- 用例 6：多机
-      - name: 用例6 - 多台主机并行
+      # ------------------------------------------------------- Case 6: multi-host
+      - name: Case 6 - parallel transfer to multiple hosts
         run: |
           docker run --rm --network host \
             -v "${{ github.workspace }}:/github/workspace" -w /github/workspace \
@@ -186,13 +187,13 @@ jobs:
             -e INPUT_TARGET=/tmp/out6 \
             scp-action:ci
 
-      - name: 校验用例6
+      - name: Verify case 6
         run: |
           test -f /tmp/out6/tests/a.txt
-          echo "用例6 通过"
+          echo "Case 6 passed"
 
-      # ------------------------------------------------------- 用例 7：dry_run
-      - name: 用例7 - dry_run 不产生任何文件
+      # ------------------------------------------------------- Case 7: dry_run
+      - name: Case 7 - dry_run produces no files
         run: |
           docker run --rm --network host \
             -v "${{ github.workspace }}:/github/workspace" -w /github/workspace \
@@ -206,13 +207,13 @@ jobs:
             -e INPUT_DRY_RUN=true \
             scp-action:ci
 
-      - name: 校验用例7
+      - name: Verify case 7
         run: |
           test ! -d /tmp/out7
-          echo "用例7 通过"
+          echo "Case 7 passed"
 
-      # ------------------------------------------------------- 用例 8：指纹校验
-      - name: 用例8 - 指纹不匹配必须失败
+      # ------------------------------------------------------- Case 8: fingerprint
+      - name: Case 8 - mismatched fingerprint must fail
         id: case8
         continue-on-error: true
         run: |
@@ -227,18 +228,18 @@ jobs:
             -e INPUT_TARGET=/tmp/out8 \
             scp-action:ci
 
-      - name: 校验用例8
+      - name: Verify case 8
         run: |
           if [ "${{ steps.case8.outcome }}" != "failure" ]; then
-            echo "::error::指纹不匹配时应当失败，实际 outcome=${{ steps.case8.outcome }}"
+            echo "::error::should fail on fingerprint mismatch, actual outcome=${{ steps.case8.outcome }}"
             exit 1
           fi
           test ! -d /tmp/out8
-          echo "用例8 通过"
+          echo "Case 8 passed"
 
-      # ------------------------------------------------------- 清理
-      - name: 汇总
+      # ------------------------------------------------------- Cleanup
+      - name: Summary
         if: always()
         run: |
-          echo "已执行 8 个端到端用例"
+          echo "Executed 8 end-to-end cases"
           find /tmp -maxdepth 1 -name 'out*' | sort
