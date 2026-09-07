@@ -1,6 +1,6 @@
 name: "SCP Command to Transfer Files"
 description: "Upload files or directories to one or more remote servers over SSH/SCP, with key/password auth, jump host and parallel transfers."
-author: "PersiLiao"
+author: "Persi.Liao"
 
 branding:
   icon: "upload-cloud"

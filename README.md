@@ -27,7 +27,7 @@ Implemented as a **Docker container action** with `openssh-client`, `sshpass` an
 
 ```yaml
 - name: Copy files to server
-  uses: PersiLiao/scp-action@v1
+  uses: persiliao/scp-action@v1
   with:
     host: ${{ secrets.HOST }}
     username: ${{ secrets.USERNAME }}
@@ -40,7 +40,7 @@ Implemented as a **Docker container action** with `openssh-client`, `sshpass` an
 ### Password
 
 ```yaml
-- uses: PersiLiao/scp-action@v1
+- uses: persiliao/scp-action@v1
   with:
     host: example.com
     username: foo
@@ -145,7 +145,7 @@ source: |
 ### Multiple servers
 
 ```yaml
-- uses: PersiLiao/scp-action@v1
+- uses: persiliao/scp-action@v1
   with:
     host: "web1.example.com,web2.example.com:2222"
     username: deploy
@@ -158,7 +158,7 @@ source: |
 ### Jump host
 
 ```yaml
-- uses: PersiLiao/scp-action@v1
+- uses: persiliao/scp-action@v1
   with:
     host: 10.0.0.10
     username: deploy
@@ -192,7 +192,7 @@ A mismatch fails the action immediately.
   with:
     separator: ","
 
-- uses: PersiLiao/scp-action@v1
+- uses: persiliao/scp-action@v1
   with:
     host: ${{ secrets.HOST }}
     username: ${{ secrets.USERNAME }}

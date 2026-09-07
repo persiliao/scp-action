@@ -27,7 +27,7 @@
 
 ```yaml
 - name: 上传文件到服务器
-  uses: PersiLiao/scp-action@v1
+  uses: persiliao/scp-action@v1
   with:
     host: ${{ secrets.HOST }}
     username: ${{ secrets.USERNAME }}
@@ -40,7 +40,7 @@
 ### 密码认证
 
 ```yaml
-- uses: PersiLiao/scp-action@v1
+- uses: persiliao/scp-action@v1
   with:
     host: example.com
     username: foo
@@ -145,7 +145,7 @@ source: |
 ### 多机部署
 
 ```yaml
-- uses: PersiLiao/scp-action@v1
+- uses: persiliao/scp-action@v1
   with:
     host: "web1.example.com,web2.example.com:2222"
     username: deploy
@@ -158,7 +158,7 @@ source: |
 ### 跳板机
 
 ```yaml
-- uses: PersiLiao/scp-action@v1
+- uses: persiliao/scp-action@v1
   with:
     host: 10.0.0.10
     username: deploy
@@ -192,7 +192,7 @@ ssh-keyscan -t ed25519 example.com | ssh-keygen -lf -
   with:
     separator: ","
 
-- uses: PersiLiao/scp-action@v1
+- uses: persiliao/scp-action@v1
   with:
     host: ${{ secrets.HOST }}
     username: ${{ secrets.USERNAME }}
