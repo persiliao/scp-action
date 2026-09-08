@@ -1,0 +1,8 @@
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.tar.gz
+node_modules/
+venv/
+__pycache__/

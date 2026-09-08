@@ -1,0 +1,85 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Static checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ShellCheck
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/mnt" -w /mnt \
+            koalaman/shellcheck:stable entrypoint.sh
+
+      - name: actionlint
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/repo" -w /repo \
+            rhysd/actionlint:latest -color
+
+      - name: Validate action.yml
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 - <<'PY'
+          import yaml
+
+          with open("action.yml", encoding="utf-8") as fh:
+              doc = yaml.safe_load(fh)
+
+          assert doc["runs"]["using"] == "docker", doc["runs"]
+          assert doc["runs"]["image"] == "Dockerfile", doc["runs"]
+          assert "host" in doc["inputs"] and "source" in doc["inputs"]
+          print("action.yml OK -", len(doc["inputs"]), "inputs")
+          PY
+
+  build:
+    name: Build image and smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t scp-action:ci .
+
+      - name: Smoke - dry-run end-to-end
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/github/workspace" \
+            -w /github/workspace \
+            -e INPUT_HOST=10.255.255.1 \
+            -e INPUT_USERNAME=demo \
+            -e INPUT_PASSWORD=demo \
+            -e INPUT_SOURCE=tests/a.txt \
+            -e INPUT_TARGET=/tmp/demo \
+            -e INPUT_DRY_RUN=true \
+            scp-action:ci
+
+      - name: Smoke - missing auth must fail
+        run: |
+          set +e
+          docker run --rm \
+            -v "${{ github.workspace }}:/github/workspace" \
+            -w /github/workspace \
+            -e INPUT_HOST=10.255.255.1 \
+            -e INPUT_USERNAME=demo \
+            -e INPUT_SOURCE=tests/a.txt \
+            -e INPUT_TARGET=/tmp/demo \
+            scp-action:ci
+          code=$?
+          set -e
+          if [ "$code" -eq 0 ]; then
+            echo "::error::should fail when auth is missing"
+            exit 1
+          fi
+          echo "Failed as expected, exit code $code"

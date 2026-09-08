@@ -1,0 +1,40 @@
+name: example
+
+# Manually triggered deployment example.
+# Before using, configure HOST / USERNAME / SSH_PRIVATE_KEY in Settings -> Secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Remote target directory"
+        required: false
+        default: "/opt/app"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build artifact
+        run: |
+          mkdir -p dist
+          echo "build at $(date -u +%Y-%m-%dT%H:%M:%SZ)" > dist/BUILD.txt
+
+      - name: Upload to server
+        id: scp
+        uses: ./
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          source: "dist"
+          target: ${{ github.event.inputs.target }}
+          strip_components: 1
+          rm: false
+          debug: false
+          capture_stdout: true
+
+      - name: Print duration
+        run: echo "Transfer took ${{ steps.scp.outputs.duration }} seconds"

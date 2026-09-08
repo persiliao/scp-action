@@ -1,0 +1,245 @@
+name: integration
+
+# Start sshd on the runner itself and run end-to-end verification of this action.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SSH_PORT: "2222"
+
+jobs:
+  e2e:
+    name: End-to-end transfer tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---------------------------------------------------------------- Setup
+      - name: Start local sshd
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq openssh-server
+
+          ssh-keygen -t ed25519 -N '' -C 'scp-action-ci' -f "${RUNNER_TEMP}/id_ed25519"
+          mkdir -p "${HOME}/.ssh"
+          chmod 700 "${HOME}/.ssh"
+          cat "${RUNNER_TEMP}/id_ed25519.pub" >> "${HOME}/.ssh/authorized_keys"
+          chmod 600 "${HOME}/.ssh/authorized_keys"
+
+          echo "${USER}:scp-ci-pass" | sudo chpasswd
+
+          sudo mkdir -p /run/sshd
+          sudo ssh-keygen -A
+          sudo /usr/sbin/sshd \
+            -o "Port ${SSH_PORT}" \
+            -o 'PubkeyAuthentication yes' \
+            -o 'PasswordAuthentication yes'
+          sleep 1
+
+      - name: Collect host fingerprint and private key
+        id: ssh
+        run: |
+          set -euo pipefail
+          ssh-keyscan -t ed25519 -p "${SSH_PORT}" 127.0.0.1 > "${RUNNER_TEMP}/known_hosts"
+          fp="$(ssh-keygen -lf "${RUNNER_TEMP}/known_hosts" | awk '{print $2}')"
+          {
+            echo "fingerprint=${fp}"
+            echo "username=${USER}"
+            echo 'key<<SCP_EOF'
+            cat "${RUNNER_TEMP}/id_ed25519"
+            echo 'SCP_EOF'
+          } >> "${GITHUB_OUTPUT}"
+          echo "fingerprint=${fp}"
+
+      - name: Get runner private IP (for the container to reach sshd)
+        id: net
+        run: |
+          set -euo pipefail
+          ip="$(hostname -I | awk '{print $1}')"
+          echo "value=${ip}" >> "${GITHUB_OUTPUT}"
+          echo "runner ip=${ip}"
+
+      - name: Build image
+        run: docker build -t scp-action:ci .
+
+      # ------------------------------------------------------- Case 1: uses path
+      # Note: the action container does not share the runner network namespace,
+      # so the private IP is used instead of 127.0.0.1
+      - name: Case 1 - invoke via action.yml (key + fingerprint, preserve original paths)
+        id: case1
+        uses: ./
+        with:
+          host: ${{ steps.net.outputs.value }}
+          port: ${{ env.SSH_PORT }}
+          username: ${{ steps.ssh.outputs.username }}
+          key: ${{ steps.ssh.outputs.key }}
+          fingerprint: ${{ steps.ssh.outputs.fingerprint }}
+          source: "tests/a.txt,tests/b.txt"
+          target: "/tmp/out1"
+
+      - name: Verify case 1
+        run: |
+          test -f /tmp/out1/tests/a.txt
+          test -f /tmp/out1/tests/b.txt
+          echo "outputs.duration=${{ steps.case1.outputs.duration }}"
+          echo "Case 1 passed"
+
+      # ------------------------------------------------------- Case 2: strip
+      - name: Case 2 - strip_components=1
+        run: |
+          docker run --rm --network host \
+            -v "${{ github.workspace }}:/github/workspace" -w /github/workspace \
+            -e INPUT_HOST=127.0.0.1 \
+            -e "INPUT_PORT=${SSH_PORT}" \
+            -e "INPUT_USERNAME=${{ steps.ssh.outputs.username }}" \
+            -e "INPUT_KEY=${{ steps.ssh.outputs.key }}" \
+            -e "INPUT_FINGERPRINT=${{ steps.ssh.outputs.fingerprint }}" \
+            -e INPUT_SOURCE=tests/a.txt \
+            -e INPUT_TARGET=/tmp/out2 \
+            -e INPUT_STRIP_COMPONENTS=1 \
+            scp-action:ci
+
+      - name: Verify case 2
+        run: |
+          test -f /tmp/out2/a.txt
+          test ! -e /tmp/out2/tests
+          echo "Case 2 passed"
+
+      # ------------------------------------------------------- Case 3: glob/exclude
+      - name: Case 3 - glob and exclude
+        run: |
+          docker run --rm --network host \
+            -v "${{ github.workspace }}:/github/workspace" -w /github/workspace \
+            -e INPUT_HOST=127.0.0.1 \
+            -e "INPUT_PORT=${SSH_PORT}" \
+            -e "INPUT_USERNAME=${{ steps.ssh.outputs.username }}" \
+            -e "INPUT_KEY=${{ steps.ssh.outputs.key }}" \
+            -e "INPUT_FINGERPRINT=${{ steps.ssh.outputs.fingerprint }}" \
+            -e 'INPUT_SOURCE=tests/*,!tests/c.txt' \
+            -e INPUT_TARGET=/tmp/out3 \
+            scp-action:ci
+
+      - name: Verify case 3
+        run: |
+          test -f /tmp/out3/tests/a.txt
+          test -f /tmp/out3/tests/b.txt
+          test ! -e /tmp/out3/tests/c.txt
+          echo "Case 3 passed"
+
+      # ------------------------------------------------------- Case 4: rm
+      - name: Case 4 - clean target before upload
+        run: |
+          mkdir -p /tmp/out4 && touch /tmp/out4/stale.txt
+          docker run --rm --network host \
+            -v "${{ github.workspace }}:/github/workspace" -w /github/workspace \
+            -e INPUT_HOST=127.0.0.1 \
+            -e "INPUT_PORT=${SSH_PORT}" \
+            -e "INPUT_USERNAME=${{ steps.ssh.outputs.username }}" \
+            -e "INPUT_KEY=${{ steps.ssh.outputs.key }}" \
+            -e "INPUT_FINGERPRINT=${{ steps.ssh.outputs.fingerprint }}" \
+            -e INPUT_SOURCE=tests/a.txt \
+            -e INPUT_TARGET=/tmp/out4 \
+            -e INPUT_RM=true \
+            scp-action:ci
+
+      - name: Verify case 4
+        run: |
+          test ! -e /tmp/out4/stale.txt
+          test -f /tmp/out4/tests/a.txt
+          echo "Case 4 passed"
+
+      # ------------------------------------------------------- Case 5: password
+      - name: Case 5 - password authentication
+        run: |
+          docker run --rm --network host \
+            -v "${{ github.workspace }}:/github/workspace" -w /github/workspace \
+            -e INPUT_HOST=127.0.0.1 \
+            -e "INPUT_PORT=${SSH_PORT}" \
+            -e "INPUT_USERNAME=${{ steps.ssh.outputs.username }}" \
+            -e INPUT_PASSWORD=scp-ci-pass \
+            -e INPUT_SOURCE=tests/c.txt \
+            -e INPUT_TARGET=/tmp/out5 \
+            scp-action:ci
+
+      - name: Verify case 5
+        run: |
+          test -f /tmp/out5/tests/c.txt
+          echo "Case 5 passed"
+
+      # ------------------------------------------------------- Case 6: multi-host
+      - name: Case 6 - parallel transfer to multiple hosts
+        run: |
+          docker run --rm --network host \
+            -v "${{ github.workspace }}:/github/workspace" -w /github/workspace \
+            -e 'INPUT_HOST=127.0.0.1,127.0.0.1' \
+            -e "INPUT_PORT=${SSH_PORT}" \
+            -e "INPUT_USERNAME=${{ steps.ssh.outputs.username }}" \
+            -e "INPUT_KEY=${{ steps.ssh.outputs.key }}" \
+            -e "INPUT_FINGERPRINT=${{ steps.ssh.outputs.fingerprint }}" \
+            -e INPUT_SOURCE=tests/a.txt \
+            -e INPUT_TARGET=/tmp/out6 \
+            scp-action:ci
+
+      - name: Verify case 6
+        run: |
+          test -f /tmp/out6/tests/a.txt
+          echo "Case 6 passed"
+
+      # ------------------------------------------------------- Case 7: dry_run
+      - name: Case 7 - dry_run produces no files
+        run: |
+          docker run --rm --network host \
+            -v "${{ github.workspace }}:/github/workspace" -w /github/workspace \
+            -e INPUT_HOST=127.0.0.1 \
+            -e "INPUT_PORT=${SSH_PORT}" \
+            -e "INPUT_USERNAME=${{ steps.ssh.outputs.username }}" \
+            -e "INPUT_KEY=${{ steps.ssh.outputs.key }}" \
+            -e "INPUT_FINGERPRINT=${{ steps.ssh.outputs.fingerprint }}" \
+            -e INPUT_SOURCE=tests/a.txt \
+            -e INPUT_TARGET=/tmp/out7 \
+            -e INPUT_DRY_RUN=true \
+            scp-action:ci
+
+      - name: Verify case 7
+        run: |
+          test ! -d /tmp/out7
+          echo "Case 7 passed"
+
+      # ------------------------------------------------------- Case 8: fingerprint
+      - name: Case 8 - mismatched fingerprint must fail
+        id: case8
+        continue-on-error: true
+        run: |
+          docker run --rm --network host \
+            -v "${{ github.workspace }}:/github/workspace" -w /github/workspace \
+            -e INPUT_HOST=127.0.0.1 \
+            -e "INPUT_PORT=${SSH_PORT}" \
+            -e "INPUT_USERNAME=${{ steps.ssh.outputs.username }}" \
+            -e "INPUT_KEY=${{ steps.ssh.outputs.key }}" \
+            -e INPUT_FINGERPRINT=SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA \
+            -e INPUT_SOURCE=tests/a.txt \
+            -e INPUT_TARGET=/tmp/out8 \
+            scp-action:ci
+
+      - name: Verify case 8
+        run: |
+          if [ "${{ steps.case8.outcome }}" != "failure" ]; then
+            echo "::error::should fail on fingerprint mismatch, actual outcome=${{ steps.case8.outcome }}"
+            exit 1
+          fi
+          test ! -d /tmp/out8
+          echo "Case 8 passed"
+
+      # ------------------------------------------------------- Cleanup
+      - name: Summary
+        if: always()
+        run: |
+          echo "Executed 8 end-to-end cases"
+          find /tmp -maxdepth 1 -name 'out*' | sort

@@ -1,0 +1,144 @@
+name: "SSH SCP Transfer files"
+description: "Transfer files or directories over SSH/SCP. Key/password auth, jump host, parallel transfers."
+author: "Persi.Liao"
+
+branding:
+  icon: "upload-cloud"
+  color: "blue"
+
+inputs:
+  # ---------------------------------------------------------------- Connection
+  host:
+    description: "Remote host address. Multiple hosts are separated by commas (e.g. foo.com,bar.com). host:port syntax is supported."
+    required: true
+  port:
+    description: "Remote SSH port, default 22."
+    required: false
+    default: "22"
+  username:
+    description: "SSH login username."
+    required: true
+  password:
+    description: "SSH password authentication (less secure than a key; prefer key when possible)."
+    required: false
+  key:
+    description: "SSH private key content (full text of ~/.ssh/id_ed25519 or id_rsa), ideally stored in GitHub Secrets."
+    required: false
+  key_path:
+    description: "Path to the SSH private key file. Alternative to key."
+    required: false
+  passphrase:
+    description: "Passphrase of the SSH private key. Leave empty if the key is unencrypted."
+    required: false
+  fingerprint:
+    description: "SHA256 fingerprint of the remote host public key, used for host key verification to prevent MITM. Empty skips verification (not recommended for production)."
+    required: false
+  protocol:
+    description: "IP protocol version. One of tcp / tcp4 / tcp6, default tcp."
+    required: false
+    default: "tcp"
+  timeout:
+    description: "Timeout for establishing the SSH connection, default 30s."
+    required: false
+    default: "30s"
+  command_timeout:
+    description: "Timeout for a single remote command, default 10m."
+    required: false
+    default: "10m"
+  use_insecure_cipher:
+    description: "Enable additional insecure ciphers for legacy servers. Not recommended unless necessary."
+    required: false
+  cipher:
+    description: "Force a specific SSH cipher (e.g. aes256-ctr). Empty lets the client negotiate."
+    required: false
+
+  # ---------------------------------------------------------------- Transfer
+  source:
+    description: "Local files/directories to upload. Comma or newline separated, globs supported (e.g. dist/*). Entries prefixed with ! are exclude patterns."
+    required: true
+  target:
+    description: "Target directory on the remote server (must be a directory path). Multiple targets are comma separated."
+    required: true
+  rm:
+    description: "Remove the remote target directory before upload. Use with caution."
+    required: false
+    default: "false"
+  strip_components:
+    description: "Number of leading path elements to strip on the remote side when extracting, default 0 (preserve the original path from source)."
+    required: false
+    default: "0"
+  overwrite:
+    description: "Append --overwrite on remote extraction to overwrite existing files."
+    required: false
+    default: "false"
+  tar_dereference:
+    description: "Append --dereference when archiving to follow symlinks (required for Windows servers)."
+    required: false
+    default: "false"
+  tar_tmp_path:
+    description: "Remote directory for the temporary tar archive. Must end with /, default /tmp/."
+    required: false
+    default: "/tmp/"
+  tar_exec:
+    description: "Path to the remote tar executable, default tar."
+    required: false
+    default: "tar"
+  debug:
+    description: "Emit debug information (equivalent to ssh -vvv)."
+    required: false
+    default: "false"
+  dry_run:
+    description: "Only print the actions that would be performed; no connection or transfer happens."
+    required: false
+    default: "false"
+  capture_stdout:
+    description: "When true, write the remote command stdout into the stdout action output."
+    required: false
+    default: "false"
+
+  # ---------------------------------------------------------------- Jump host
+  proxy_host:
+    description: "Jump host (SSH Proxy / jump host) address."
+    required: false
+  proxy_port:
+    description: "Jump host SSH port, default 22."
+    required: false
+    default: "22"
+  proxy_username:
+    description: "Jump host login username."
+    required: false
+  proxy_password:
+    description: "Jump host password."
+    required: false
+  proxy_key:
+    description: "Jump host SSH private key content."
+    required: false
+  proxy_key_path:
+    description: "Path to the jump host SSH private key file."
+    required: false
+  proxy_passphrase:
+    description: "Jump host private key passphrase."
+    required: false
+  proxy_fingerprint:
+    description: "SHA256 fingerprint of the jump host public key, used for host key verification."
+    required: false
+  proxy_timeout:
+    description: "Jump host connection timeout, default 30s."
+    required: false
+    default: "30s"
+  proxy_use_insecure_cipher:
+    description: "Enable additional insecure ciphers on the jump host."
+    required: false
+  proxy_cipher:
+    description: "Jump host cipher."
+    required: false
+
+outputs:
+  stdout:
+    description: "Remote command stdout when capture_stdout is true."
+  duration:
+    description: "Transfer duration in seconds."
+
+runs:
+  using: "docker"
+  image: "Dockerfile"
